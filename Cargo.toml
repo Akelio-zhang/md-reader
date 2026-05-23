@@ -2,6 +2,7 @@
 name = "md-reader"
 version = "0.0.1"
 edition = "2024"
+license = "MIT"
 
 [dependencies]
 pulldown-cmark = "0.13"
