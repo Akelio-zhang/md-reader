@@ -301,6 +301,28 @@ mod tests {
     }
 
     #[test]
+    fn serves_a_real_http_request_over_tcp() {
+        let (dir, file) = temp_markdown_dir("# TCP");
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            handle_connection(stream, &file, &dir).unwrap();
+        });
+
+        let mut stream = TcpStream::connect(addr).unwrap();
+        write!(stream, "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n").unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).unwrap();
+        server.join().unwrap();
+
+        assert!(response.starts_with("HTTP/1.1 200 OK\r\n"));
+        assert!(response.contains("Cache-Control: no-store"));
+        assert!(response.contains("<h1>TCP</h1>"));
+    }
+
+    #[test]
     fn responses_are_marked_no_store() {
         let response = Response {
             status: "200 OK",

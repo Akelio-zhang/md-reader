@@ -545,6 +545,31 @@ And $x^2$ is inline.",
     }
 
     #[test]
+    fn keeps_math_delimiters_literal_in_code_spans_of_any_length() {
+        let html = render_markdown("`\\(a_i\\)` and ``\\(b_i\\)``");
+
+        assert!(html.contains("<code>\\(a_i\\)</code>"));
+        assert!(html.contains("<code>\\(b_i\\)</code>"));
+    }
+
+    #[test]
+    fn keeps_math_delimiters_literal_inside_tilde_fences() {
+        let html = render_markdown("~~~tex\n\\[a_i\\]\n~~~");
+
+        assert!(html.contains("<code class=\"language-tex\">\\[a_i\\]"));
+    }
+
+    #[test]
+    fn leaves_unmatched_backslash_delimiters_literal() {
+        let html = render_markdown(r"open \( without a closer");
+
+        assert!(!html.contains("class=\"katex\""));
+        // `\(` is a CommonMark escape for a literal parenthesis, so the
+        // backslash disappears and no math is rendered.
+        assert!(html.contains("open ( without a closer"));
+    }
+
+    #[test]
     fn keeps_math_delimiters_literal_in_code() {
         let html = render_markdown("`\\(a_i\\)`\n\n```tex\n\\[a_i\\]\n```");
 
