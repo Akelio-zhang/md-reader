@@ -11,7 +11,8 @@ use std::{
 
 pub(crate) fn serve_file(file: &Path, config: &Config) -> Result<()> {
     let base_dir = file.parent().unwrap_or(Path::new("/")).to_path_buf();
-    let listener = TcpListener::bind((config.host.as_str(), config.port))?;
+    let listener = TcpListener::bind((config.host.as_str(), config.port))
+        .map_err(|error| format!("could not bind {}:{}: {error}", config.host, config.port))?;
     let addr = listener.local_addr()?;
     let url = format!("http://{}:{}/", display_host(&config.host), addr.port());
 
@@ -42,19 +43,16 @@ pub(crate) fn serve_file(file: &Path, config: &Config) -> Result<()> {
 }
 
 fn handle_connection(mut stream: TcpStream, file: &Path, base_dir: &Path) -> Result<()> {
-    let mut buffer = [0; 2048];
+    let mut buffer = [0; 8192];
     let bytes_read = stream.read(&mut buffer)?;
     let request = String::from_utf8_lossy(&buffer[..bytes_read]);
     let request_line = request.lines().next().unwrap_or_default();
-    let path = request_line
-        .split_whitespace()
-        .nth(1)
-        .unwrap_or("/")
-        .split('?')
-        .next()
-        .unwrap_or("/");
+    let mut parts = request_line.split_whitespace();
+    let method = parts.next().unwrap_or("GET");
+    let head = method.eq_ignore_ascii_case("HEAD");
+    let path = parts.next().unwrap_or("/").split('?').next().unwrap_or("/");
 
-    respond(&mut stream, &handle_request(path, file, base_dir)?)
+    respond(&mut stream, &handle_request(path, file, base_dir)?, head)
 }
 
 fn handle_request(path: &str, file: &Path, base_dir: &Path) -> Result<Response> {
@@ -177,7 +175,7 @@ struct Response {
     body: Vec<u8>,
 }
 
-fn respond<W: Write>(stream: &mut W, response: &Response) -> Result<()> {
+fn respond<W: Write>(stream: &mut W, response: &Response, head: bool) -> Result<()> {
     write!(
         stream,
         "HTTP/1.1 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
@@ -185,7 +183,9 @@ fn respond<W: Write>(stream: &mut W, response: &Response) -> Result<()> {
         response.content_type,
         response.body.len()
     )?;
-    stream.write_all(&response.body)?;
+    if !head {
+        stream.write_all(&response.body)?;
+    }
     stream.flush()?;
     Ok(())
 }
@@ -323,6 +323,49 @@ mod tests {
     }
 
     #[test]
+    fn head_requests_return_headers_without_a_body() {
+        let (dir, file) = temp_markdown_dir("# HEAD");
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            handle_connection(stream, &file, &dir).unwrap();
+        });
+
+        let mut stream = TcpStream::connect(addr).unwrap();
+        write!(stream, "HEAD / HTTP/1.1\r\nHost: localhost\r\n\r\n").unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).unwrap();
+        server.join().unwrap();
+
+        assert!(response.starts_with("HTTP/1.1 200 OK\r\n"));
+        assert!(response.contains("Content-Length:"));
+        assert!(response.ends_with("\r\n\r\n"));
+    }
+
+    #[test]
+    fn bind_error_mentions_host_and_port() {
+        let (_dir, file) = temp_markdown_dir("# x");
+        let occupied = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = occupied.local_addr().unwrap().port();
+        let config = Config {
+            file: file.clone(),
+            host: "127.0.0.1".to_string(),
+            port,
+            open_browser: false,
+            mode: crate::cli::Mode::Serve,
+            host_set: false,
+            port_set: true,
+        };
+
+        let err = serve_file(&file, &config).unwrap_err().to_string();
+
+        assert!(err.contains("127.0.0.1"));
+        assert!(err.contains(&port.to_string()));
+    }
+
+    #[test]
     fn responses_are_marked_no_store() {
         let response = Response {
             status: "200 OK",
@@ -331,7 +374,7 @@ mod tests {
         };
         let mut buffer = Vec::new();
 
-        respond(&mut buffer, &response).unwrap();
+        respond(&mut buffer, &response, false).unwrap();
 
         let head = String::from_utf8(buffer).unwrap();
         assert!(head.starts_with("HTTP/1.1 200 OK\r\n"));
