@@ -23,7 +23,7 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Format
         run: cargo fmt --check
@@ -61,7 +61,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Verify tag matches Cargo version
         if: startsWith(github.ref, 'refs/tags/v')
@@ -97,13 +97,13 @@ jobs:
         run: Compress-Archive -Path "dist/${{ matrix.binary }}" -DestinationPath "${{ matrix.archive }}"
 
       - name: Upload workflow artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: ${{ matrix.archive }}
           path: ${{ matrix.archive }}
 
       - name: Upload release asset
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: ${{ matrix.archive }}
