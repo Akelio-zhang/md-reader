@@ -392,7 +392,9 @@ fn respond<W: Write>(stream: &mut W, response: &Response) -> Result<()> {
     write!(
         stream,
         "HTTP/1.1 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
-        response.status, response.content_type, response.body.len()
+        response.status,
+        response.content_type,
+        response.body.len()
     )?;
     stream.write_all(&response.body)?;
     stream.flush()?;
@@ -1515,7 +1517,11 @@ And $x^2$ is inline.",
 
         assert_eq!(response.status, "200 OK");
         assert_eq!(response.content_type, "text/html; charset=utf-8");
-        assert!(String::from_utf8(response.body).unwrap().contains("<h1>Hello</h1>"));
+        assert!(
+            String::from_utf8(response.body)
+                .unwrap()
+                .contains("<h1>Hello</h1>")
+        );
     }
 
     #[test]
@@ -1569,10 +1575,8 @@ And $x^2$ is inline.",
     #[test]
     fn serve_mode_rejects_percent_encoded_traversal() {
         let (dir, file) = temp_markdown_dir("## Hi");
-        let outside = std::env::temp_dir().join(format!(
-            "md-reader-outside-{}.txt",
-            std::process::id()
-        ));
+        let outside =
+            std::env::temp_dir().join(format!("md-reader-outside-{}.txt", std::process::id()));
         fs::write(&outside, "secret").unwrap();
 
         let escaped = format!(
@@ -1619,10 +1623,8 @@ And $x^2$ is inline.",
     #[test]
     fn renders_files_with_invalid_utf8_lossily() {
         let n = PREVIEW_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!(
-            "md-reader-binary-{}-{n}.md",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("md-reader-binary-{}-{n}.md", std::process::id()));
         fs::write(&path, b"plain \xff\xfe bytes").unwrap();
 
         let html = render_document(&path, false).unwrap();
