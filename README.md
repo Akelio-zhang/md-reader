@@ -10,6 +10,7 @@ temporary HTML file, opens it in your browser, and exits.
 
 - GitHub-like Markdown preview style with light and dark color schemes
 - Tables, task lists, footnotes, strikethrough, and heading attributes
+- Offline LaTeX math rendering with KaTeX (`$...$`, `$$...$$`, `\(...\)`, and `\[...\]`)
 - Relative images and links resolved from the Markdown file's directory
 - One-shot preview mode for quick reading
 - Optional local server mode for editing and browser refresh workflows

@@ -5,4 +5,5 @@ edition = "2024"
 license = "MIT"
 
 [dependencies]
+katex-rs = "0.2.4"
 pulldown-cmark = "0.13"
