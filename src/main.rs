@@ -121,7 +121,9 @@ pub(crate) mod test_utils {
     }
 
     pub(crate) fn backdate(path: &Path, age: Duration) {
-        let file = std::fs::File::open(path).unwrap();
+        // Windows' SetFileTime requires a writable handle; a read-only handle
+        // fails with access denied even for plain files.
+        let file = std::fs::OpenOptions::new().write(true).open(path).unwrap();
         let old = std::time::SystemTime::now() - age;
         file.set_times(FileTimes::new().set_modified(old)).unwrap();
     }
