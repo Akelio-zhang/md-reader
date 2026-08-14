@@ -84,11 +84,11 @@ This repository includes a GitHub Actions workflow that:
 - builds release artifacts for Linux, Windows, and macOS
 - uploads compiled binaries when a version tag is pushed
 
-To publish version `0.0.1`:
+To publish version `0.1.0`:
 
 ```sh
-git tag v0.0.1
-git push origin v0.0.1
+git tag v0.1.0
+git push origin v0.1.0
 ```
 
 ## License
