@@ -10,6 +10,7 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
     sync::OnceLock,
+    time::Duration,
 };
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
@@ -164,8 +165,13 @@ fn serve_file(file: &Path, config: &Config) -> Result<()> {
     Ok(())
 }
 
+/// Previews are only read once by the browser, so anything older than this is
+/// safe to remove when a new preview is written.
+const PREVIEW_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
+
 fn write_preview_file(source_file: &Path, html: &str) -> Result<PathBuf> {
     let preview_dir = env::temp_dir().join("md-reader");
+    cleanup_stale_previews(&preview_dir, PREVIEW_MAX_AGE);
     fs::create_dir_all(&preview_dir)?;
 
     let stem = source_file
@@ -180,6 +186,30 @@ fn write_preview_file(source_file: &Path, html: &str) -> Result<PathBuf> {
 
     fs::write(&output, html)?;
     Ok(output)
+}
+
+/// Removes preview files in `preview_dir` that are older than `max_age`, so
+/// repeated runs do not accumulate files in the temp directory. Best-effort:
+/// anything that cannot be read or removed is left alone, and directories are
+/// never removed.
+fn cleanup_stale_previews(preview_dir: &Path, max_age: Duration) {
+    let Ok(entries) = fs::read_dir(preview_dir) else {
+        return;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(modified) = fs::metadata(&path).and_then(|meta| meta.modified()) else {
+            continue;
+        };
+        let Ok(age) = modified.elapsed() else {
+            continue;
+        };
+
+        if age > max_age && path.is_file() {
+            let _ = fs::remove_file(&path);
+        }
+    }
 }
 
 struct Response {
@@ -1272,7 +1302,9 @@ hr {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs::FileTimes;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
 
     static PREVIEW_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -1292,6 +1324,19 @@ mod tests {
         let path = dir.join(format!("notes-{}-{n}.md", std::process::id()));
         fs::write(&path, contents).unwrap();
         path
+    }
+
+    fn temp_dir(prefix: &str) -> PathBuf {
+        let n = PREVIEW_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("{prefix}-{}-{n}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn backdate(path: &Path, age: Duration) {
+        let file = fs::File::open(path).unwrap();
+        let old = std::time::SystemTime::now() - age;
+        file.set_times(FileTimes::new().set_modified(old)).unwrap();
     }
 
     #[test]
@@ -1501,6 +1546,31 @@ And $x^2$ is inline.",
         let response = handle_request(&escaped, &file, &dir).unwrap();
 
         assert_eq!(response.status, "404 Not Found");
+    }
+
+    #[test]
+    fn cleanup_removes_stale_preview_files_but_keeps_fresh_ones() {
+        let dir = temp_dir("md-reader-cleanup");
+        let stale = dir.join("stale.html");
+        let fresh = dir.join("fresh.html");
+        fs::write(&stale, "old").unwrap();
+        fs::write(&fresh, "new").unwrap();
+        backdate(&stale, Duration::from_secs(48 * 3600));
+
+        cleanup_stale_previews(&dir, Duration::from_secs(24 * 3600));
+
+        assert!(!stale.exists());
+        assert!(fresh.exists());
+    }
+
+    #[test]
+    fn cleanup_only_removes_files_not_directories() {
+        let dir = temp_dir("md-reader-cleanup");
+        fs::create_dir_all(dir.join("subdir")).unwrap();
+
+        cleanup_stale_previews(&dir, Duration::ZERO);
+
+        assert!(dir.join("subdir").is_dir());
     }
 
     #[cfg(unix)]
