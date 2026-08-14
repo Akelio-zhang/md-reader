@@ -137,6 +137,7 @@ fn preview_file(file: &Path, open_browser: bool) -> Result<()> {
 }
 
 fn serve_file(file: &Path, config: &Config) -> Result<()> {
+    let base_dir = file.parent().unwrap_or(Path::new("/")).to_path_buf();
     let listener = TcpListener::bind((config.host.as_str(), config.port))?;
     let addr = listener.local_addr()?;
     let url = format!("http://{}:{}/", config.host, addr.port());
@@ -152,7 +153,7 @@ fn serve_file(file: &Path, config: &Config) -> Result<()> {
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
-                if let Err(err) = handle_connection(stream, file) {
+                if let Err(err) = handle_connection(stream, file, &base_dir) {
                     eprintln!("request failed: {err}");
                 }
             }
@@ -187,7 +188,7 @@ struct Response {
     body: Vec<u8>,
 }
 
-fn handle_connection(mut stream: TcpStream, file: &Path) -> Result<()> {
+fn handle_connection(mut stream: TcpStream, file: &Path, base_dir: &Path) -> Result<()> {
     let mut buffer = [0; 2048];
     let bytes_read = stream.read(&mut buffer)?;
     let request = String::from_utf8_lossy(&buffer[..bytes_read]);
@@ -200,10 +201,10 @@ fn handle_connection(mut stream: TcpStream, file: &Path) -> Result<()> {
         .next()
         .unwrap_or("/");
 
-    respond(&mut stream, &handle_request(path, file)?)
+    respond(&mut stream, &handle_request(path, file, base_dir)?)
 }
 
-fn handle_request(path: &str, file: &Path) -> Result<Response> {
+fn handle_request(path: &str, file: &Path, base_dir: &Path) -> Result<Response> {
     match path {
         "/" | "/index.html" => Ok(Response {
             status: "200 OK",
@@ -220,11 +221,100 @@ fn handle_request(path: &str, file: &Path) -> Result<Response> {
             content_type: "text/plain; charset=utf-8",
             body: b"ok".to_vec(),
         }),
-        _ => Ok(Response {
-            status: "404 Not Found",
-            content_type: "text/plain; charset=utf-8",
-            body: b"not found".to_vec(),
-        }),
+        _ => static_response(path, base_dir),
+    }
+}
+
+fn static_response(path: &str, base_dir: &Path) -> Result<Response> {
+    let decoded = percent_decode_path(path);
+    let candidate = base_dir.join(decoded.trim_start_matches('/'));
+    Ok(serve_static_file(&candidate, base_dir)?.unwrap_or_else(not_found))
+}
+
+/// Serves a file from `base_dir` as a response, resolving symlinks and `..`
+/// segments first so nothing outside the directory can be reached.
+fn serve_static_file(candidate: &Path, base_dir: &Path) -> Result<Option<Response>> {
+    let base_dir = fs::canonicalize(base_dir)?;
+    let canonical = match fs::canonicalize(candidate) {
+        Ok(path) => path,
+        Err(_) => return Ok(None),
+    };
+
+    if !canonical.starts_with(&base_dir) || !canonical.is_file() {
+        return Ok(None);
+    }
+
+    let body = fs::read(&canonical)?;
+    Ok(Some(Response {
+        status: "200 OK",
+        content_type: content_type_for(&canonical),
+        body,
+    }))
+}
+
+fn not_found() -> Response {
+    Response {
+        status: "404 Not Found",
+        content_type: "text/plain; charset=utf-8",
+        body: b"not found".to_vec(),
+    }
+}
+
+fn content_type_for(path: &Path) -> &'static str {
+    match path.extension().and_then(OsStr::to_str) {
+        Some("html" | "htm") => "text/html; charset=utf-8",
+        Some("css") => "text/css; charset=utf-8",
+        Some("js") => "text/javascript; charset=utf-8",
+        Some("png") => "image/png",
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("svg") => "image/svg+xml",
+        Some("webp") => "image/webp",
+        Some("ico") => "image/x-icon",
+        Some("woff2") => "font/woff2",
+        Some("woff") => "font/woff",
+        Some("ttf") => "font/ttf",
+        Some("pdf") => "application/pdf",
+        Some("json") => "application/json; charset=utf-8",
+        Some("md" | "txt") => "text/plain; charset=utf-8",
+        Some("mp4") => "video/mp4",
+        Some("mp3") => "audio/mpeg",
+        _ => "application/octet-stream",
+    }
+}
+
+/// Decodes the percent-encoding used in URL paths. `+` is left as-is since it
+/// only means space in query strings; malformed escapes pass through literally.
+fn percent_decode_path(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut output = Vec::with_capacity(bytes.len());
+    let mut position = 0;
+
+    while position < bytes.len() {
+        if bytes[position] == b'%'
+            && position + 2 < bytes.len()
+            && let (Some(high), Some(low)) = (
+                hex_value(bytes[position + 1]),
+                hex_value(bytes[position + 2]),
+            )
+        {
+            output.push(high << 4 | low);
+            position += 3;
+        } else {
+            output.push(bytes[position]);
+            position += 1;
+        }
+    }
+
+    String::from_utf8_lossy(&output).into_owned()
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
     }
 }
 
@@ -250,6 +340,11 @@ fn render_document(file: &Path, serve: bool) -> Result<String> {
         live_reload_script(file)?
     } else {
         String::new()
+    };
+    let base_href = if serve {
+        "/".to_string()
+    } else {
+        base_href_for(file)?
     };
 
     Ok(format!(
@@ -279,7 +374,7 @@ fn render_document(file: &Path, serve: bool) -> Result<String> {
 </body>
 </html>"#,
         title = escape_html(title),
-        base_href = escape_html(&base_href_for(file)?),
+        base_href = escape_html(&base_href),
         css = reader_css(),
         body = body,
         script = script
@@ -1181,6 +1276,15 @@ mod tests {
 
     static PREVIEW_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
+    fn temp_markdown_dir(contents: &str) -> (PathBuf, PathBuf) {
+        let n = PREVIEW_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("md-reader-tests-{}-{n}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("notes.md");
+        fs::write(&file, contents).unwrap();
+        (dir, file)
+    }
+
     fn temp_markdown_file(contents: &str) -> PathBuf {
         let n = PREVIEW_COUNTER.fetch_add(1, Ordering::Relaxed);
         let dir = std::env::temp_dir().join("md-reader-tests");
@@ -1311,8 +1415,8 @@ And $x^2$ is inline.",
 
     #[test]
     fn refresh_route_reports_file_mtime_in_milliseconds() {
-        let file = temp_markdown_file("hello");
-        let response = handle_request("/refresh", &file).unwrap();
+        let (dir, file) = temp_markdown_dir("hello");
+        let response = handle_request("/refresh", &file, &dir).unwrap();
 
         assert_eq!(response.status, "200 OK");
         assert_eq!(response.content_type, "text/plain; charset=utf-8");
@@ -1324,11 +1428,96 @@ And $x^2$ is inline.",
 
     #[test]
     fn serve_root_route_returns_rendered_document() {
-        let file = temp_markdown_file("# Hello");
-        let response = handle_request("/", &file).unwrap();
+        let (dir, file) = temp_markdown_dir("# Hello");
+        let response = handle_request("/", &file, &dir).unwrap();
 
         assert_eq!(response.status, "200 OK");
         assert_eq!(response.content_type, "text/html; charset=utf-8");
         assert!(String::from_utf8(response.body).unwrap().contains("<h1>Hello</h1>"));
+    }
+
+    #[test]
+    fn serve_html_uses_server_root_as_base_href() {
+        let file = temp_markdown_file("hello");
+        let html = render_document(&file, true).unwrap();
+
+        assert!(html.contains("<base href=\"/\">"));
+    }
+
+    #[test]
+    fn preview_html_uses_file_url_as_base_href() {
+        let file = temp_markdown_file("hello");
+        let html = render_document(&file, false).unwrap();
+
+        assert!(html.contains("<base href=\"file://"));
+    }
+
+    #[test]
+    fn serve_mode_serves_files_from_the_markdown_directory() {
+        let (dir, file) = temp_markdown_dir("## Hi");
+        let image = b"\x89PNG\r\n\x1a\nfake png bytes";
+        fs::write(dir.join("logo.png"), image).unwrap();
+
+        let response = handle_request("/logo.png", &file, &dir).unwrap();
+
+        assert_eq!(response.status, "200 OK");
+        assert_eq!(response.content_type, "image/png");
+        assert_eq!(response.body, image);
+    }
+
+    #[test]
+    fn serve_mode_sets_mime_type_from_file_extension() {
+        let (dir, file) = temp_markdown_dir("## Hi");
+        fs::write(dir.join("style.css"), "body { margin: 0 }").unwrap();
+
+        let response = handle_request("/style.css", &file, &dir).unwrap();
+
+        assert_eq!(response.status, "200 OK");
+        assert_eq!(response.content_type, "text/css; charset=utf-8");
+    }
+
+    #[test]
+    fn serve_mode_returns_404_for_missing_static_files() {
+        let (dir, file) = temp_markdown_dir("## Hi");
+        let response = handle_request("/nope.png", &file, &dir).unwrap();
+
+        assert_eq!(response.status, "404 Not Found");
+    }
+
+    #[test]
+    fn serve_mode_rejects_percent_encoded_traversal() {
+        let (dir, file) = temp_markdown_dir("## Hi");
+        let outside = std::env::temp_dir().join(format!(
+            "md-reader-outside-{}.txt",
+            std::process::id()
+        ));
+        fs::write(&outside, "secret").unwrap();
+
+        let escaped = format!(
+            "/{}/md-reader-outside-{}.txt",
+            "%2e%2e/".repeat(12),
+            std::process::id()
+        );
+        let response = handle_request(&escaped, &file, &dir).unwrap();
+
+        assert_eq!(response.status, "404 Not Found");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn serve_mode_rejects_symlinks_escaping_the_directory() {
+        use std::os::unix::fs::symlink;
+
+        let (dir, file) = temp_markdown_dir("## Hi");
+        let outside = std::env::temp_dir().join(format!(
+            "md-reader-outside-symlink-{}.txt",
+            std::process::id()
+        ));
+        fs::write(&outside, "secret").unwrap();
+        symlink(&outside, dir.join("escape.png")).unwrap();
+
+        let response = handle_request("/escape.png", &file, &dir).unwrap();
+
+        assert_eq!(response.status, "404 Not Found");
     }
 }
