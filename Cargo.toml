@@ -6,6 +6,7 @@ license = "MIT"
 
 [dependencies]
 katex-rs = "0.2.4"
+lumis = { version = "0.13.0", default-features = false, features = ["lang-rust", "lang-python", "lang-javascript", "lang-typescript", "lang-json", "lang-html", "lang-css", "lang-bash", "lang-sql", "lang-markdown", "lang-go", "lang-java", "lang-c", "lang-cpp", "lang-yaml"] }
 pulldown-cmark = "0.13"
 
 [profile.release]

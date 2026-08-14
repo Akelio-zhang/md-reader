@@ -1,7 +1,12 @@
 use crate::Result;
 use katex::{KatexContext, Settings, render_to_string};
-use pulldown_cmark::{Event, Options, Parser, html};
+use lumis::formatter::Formatter;
+use lumis::formatters::html_multi_themes::HtmlMultiThemesBuilder;
+use lumis::languages::Language;
+use lumis::themes;
+use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd, html};
 use std::{
+    collections::HashMap,
     env,
     ffi::OsStr,
     fs,
@@ -141,6 +146,31 @@ pub(crate) fn file_mtime_millis(file: &Path) -> Result<u128> {
         .unwrap_or(0))
 }
 
+/// Syntax-highlights a fenced code block with lumis, returning `None` when the
+/// language is unknown or formatting fails so the caller can fall back to a
+/// plain code block.
+fn highlight_code(lang: &str, code: &str) -> Option<String> {
+    let language = Language::guess(Some(lang), "");
+    if language == Language::PlainText {
+        return None;
+    }
+
+    let mut theme_map = HashMap::new();
+    theme_map.insert("light".to_string(), themes::get("github_light").ok()?);
+    theme_map.insert("dark".to_string(), themes::get("github_dark").ok()?);
+
+    let mut builder = HtmlMultiThemesBuilder::new();
+    builder
+        .language(language)
+        .themes(theme_map)
+        .default_theme("light");
+    let formatter = builder.build().ok()?;
+
+    let mut output = Vec::new();
+    formatter.format(code, &mut output).ok()?;
+    String::from_utf8(output).ok()
+}
+
 fn render_markdown(markdown: &str) -> String {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_FOOTNOTES);
@@ -171,8 +201,44 @@ fn render_markdown(markdown: &str) -> String {
         }
         event => event,
     });
+
+    // Collapse each code block into a single event: collect its text, highlight
+    // it, and emit the highlighted HTML; when highlighting is not possible the
+    // original Start/Text/End events are rebuilt unchanged.
+    let mut iter = parser.peekable();
+    let mut events = Vec::new();
+
+    while let Some(event) = iter.next() {
+        match event {
+            Event::Start(Tag::CodeBlock(kind)) => {
+                let mut text = String::new();
+                for inner in iter.by_ref() {
+                    match inner {
+                        Event::Text(part) => text.push_str(part.as_ref()),
+                        Event::End(TagEnd::CodeBlock) => break,
+                        _ => {}
+                    }
+                }
+
+                let lang = match &kind {
+                    CodeBlockKind::Fenced(lang) => lang.as_ref(),
+                    CodeBlockKind::Indented => "",
+                };
+                match highlight_code(lang, &text) {
+                    Some(html) => events.push(Event::Html(html.into())),
+                    None => {
+                        events.push(Event::Start(Tag::CodeBlock(kind)));
+                        events.push(Event::Text(text.into()));
+                        events.push(Event::End(TagEnd::CodeBlock));
+                    }
+                }
+            }
+            event => events.push(event),
+        }
+    }
+
     let mut output = String::new();
-    html::push_html(&mut output, parser);
+    html::push_html(&mut output, events.into_iter());
     output
 }
 
@@ -575,6 +641,37 @@ And $x^2$ is inline.",
 
         assert!(html.contains("<code>\\(a_i\\)</code>"));
         assert!(html.contains("<code class=\"language-tex\">\\[a_i\\]"));
+    }
+
+    #[test]
+    fn highlights_fenced_rust_code() {
+        let html = render_markdown("```rust\nfn main() {}\n```");
+
+        assert!(html.contains("class=\"lumis lumis-themes dark light\""));
+        assert!(html.contains("<code class=\"language-rust\" translate=\"no\""));
+    }
+
+    #[test]
+    fn keeps_unmarked_code_blocks_plain() {
+        let html = render_markdown("```\nplain text\n```");
+
+        assert!(!html.contains("lumis"));
+        assert!(html.contains("<pre><code>plain text"));
+    }
+
+    #[test]
+    fn keeps_unknown_language_code_blocks_plain() {
+        let html = render_markdown("```notalanguage\nwhatever\n```");
+
+        assert!(!html.contains("lumis"));
+        assert!(html.contains("<pre><code class=\"language-notalanguage\">whatever"));
+    }
+
+    #[test]
+    fn keeps_plaintext_language_code_blocks_plain() {
+        let html = render_markdown("```text\nplain\n```");
+
+        assert!(!html.contains("lumis"));
     }
 
     #[test]

@@ -11,6 +11,7 @@ temporary HTML file, opens it in your browser, and exits.
 - GitHub-like Markdown preview style with light and dark color schemes
 - Tables, task lists, footnotes, strikethrough, and heading attributes
 - Offline LaTeX math rendering with KaTeX (`$...$`, `$$...$$`, `\(...\)`, and `\[...\]`)
+- Syntax-highlighted fenced code blocks (15 common languages) with light and dark themes, and one-click code copy
 - Relative images and links resolved from the Markdown file's directory
 - One-shot preview mode for quick reading
 - Optional local server mode with automatic refresh for editing workflows

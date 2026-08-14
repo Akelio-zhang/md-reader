@@ -359,6 +359,20 @@ hr {
 }
 
 @media (prefers-color-scheme: dark) {
+  .lumis-themes.dark,
+  .lumis-themes.dark span {
+    color: var(--lumis-dark) !important;
+    font-style: var(--lumis-dark-font-style) !important;
+    font-weight: var(--lumis-dark-font-weight) !important;
+    text-decoration: var(--lumis-dark-text-decoration) !important;
+  }
+
+  .lumis-themes.dark {
+    background-color: var(--lumis-dark-bg) !important;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
   body {
     background: radial-gradient(64rem 36rem at 50% -10rem, rgb(37 57 92 / 0.38), transparent 72%), var(--canvas);
   }
