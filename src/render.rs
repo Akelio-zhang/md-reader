@@ -71,9 +71,9 @@ pub(crate) fn render_document(file: &Path, serve: bool) -> Result<String> {
         .unwrap_or("Markdown Reader");
     let body = render_markdown(&markdown);
     let script = if serve {
-        live_reload_script(file)?
+        format!("{COPY_SCRIPT}\n{}", live_reload_script(file)?)
     } else {
-        String::new()
+        COPY_SCRIPT.to_string()
     };
     let base_href = if serve {
         "/".to_string()
@@ -115,6 +115,42 @@ pub(crate) fn render_document(file: &Path, serve: bool) -> Result<String> {
         script = script
     ))
 }
+
+/// Adds a copy button to each code block. Buttons are created lazily on first
+/// pointer hover so pages with no code blocks stay untouched.
+const COPY_SCRIPT: &str = r#"<script>
+(function () {
+  document.addEventListener("pointerover", function (event) {
+    var pre = event.target.closest("pre");
+    if (!pre || pre.dataset.mdCopy) return;
+    pre.dataset.mdCopy = "1";
+
+    var button = document.createElement("button");
+    button.type = "button";
+    button.className = "code-copy";
+    button.textContent = "Copy";
+    button.setAttribute("aria-label", "Copy code to clipboard");
+    button.addEventListener("click", function () {
+      var text = pre.innerText;
+      function copied() {
+        button.textContent = "Copied ✓";
+        setTimeout(function () { button.textContent = "Copy"; }, 1500);
+      }
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(copied, function () {});
+      } else {
+        var textarea = document.createElement("textarea");
+        textarea.value = text;
+        document.body.appendChild(textarea);
+        textarea.select();
+        try { document.execCommand("copy"); copied(); } catch (e) {}
+        document.body.removeChild(textarea);
+      }
+    });
+    pre.appendChild(button);
+  });
+})();
+</script>"#;
 
 /// Polls the serve-mode `/refresh` endpoint and reloads the page when the
 /// source file's modification time changes.
@@ -754,8 +790,22 @@ And $x^2$ is inline.",
     }
 
     #[test]
+    fn both_modes_embed_the_copy_script_once() {
+        let file = temp_markdown_file("hello");
+
+        let preview = render_document(&file, false).unwrap();
+        let served = render_document(&file, true).unwrap();
+
+        assert_eq!(preview.matches("Copied ✓").count(), 1);
+        assert_eq!(served.matches("Copied ✓").count(), 1);
+    }
+
+    #[test]
     fn reader_css_styles_katex_errors() {
-        assert!(reader_css().contains(".katex-error"));
+        let css = reader_css();
+
+        assert!(css.contains(".katex-error"));
+        assert!(css.contains(".code-copy"));
     }
 
     #[test]

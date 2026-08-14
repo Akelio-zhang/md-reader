@@ -258,6 +258,7 @@ code {
 }
 
 pre {
+  position: relative;
   background: var(--pre-bg);
   border: 1px solid var(--border-strong);
   border-radius: 10px;
@@ -370,6 +371,37 @@ hr {
   .lumis-themes.dark {
     background-color: var(--lumis-dark-bg) !important;
   }
+}
+
+.code-copy {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  align-items: center;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  color: var(--muted);
+  cursor: pointer;
+  font: 600 11px/1 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  opacity: 0;
+  padding: 4px 9px;
+  transition: opacity 140ms ease-out, color 140ms ease-out, border-color 140ms ease-out;
+}
+
+pre:hover .code-copy,
+pre:focus-within .code-copy {
+  opacity: 1;
+}
+
+.code-copy:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.code-copy:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
 }
 
 @media (prefers-color-scheme: dark) {
