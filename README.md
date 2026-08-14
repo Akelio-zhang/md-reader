@@ -65,6 +65,7 @@ Options:
   --port <port>    Port to bind in --serve mode (default: random available port)
   --no-open        Render or serve without opening a browser
   -h, --help       Show this help
+  -V, --version    Show version
 ```
 
 ## Development

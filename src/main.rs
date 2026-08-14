@@ -22,6 +22,8 @@ struct Config {
     port: u16,
     open_browser: bool,
     mode: Mode,
+    host_set: bool,
+    port_set: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,28 +46,33 @@ impl Config {
         let mut port = 0;
         let mut open_browser = true;
         let mut mode = Mode::Preview;
+        let mut host_set = false;
+        let mut port_set = false;
 
         while let Some(arg) = args.next() {
             match arg.as_str() {
-                "-h" | "--help" => return Err(usage().into()),
                 "--no-open" => open_browser = false,
                 "--serve" => mode = Mode::Serve,
                 "--host" => {
                     host = args
                         .next()
                         .ok_or_else(|| "--host requires a value".to_string())?;
+                    host_set = true;
                 }
                 "--port" => {
                     let value = args
                         .next()
                         .ok_or_else(|| "--port requires a value".to_string())?;
                     port = value.parse::<u16>()?;
+                    port_set = true;
                 }
                 _ if arg.starts_with("--host=") => {
                     host = arg["--host=".len()..].to_string();
+                    host_set = true;
                 }
                 _ if arg.starts_with("--port=") => {
                     port = arg["--port=".len()..].parse::<u16>()?;
+                    port_set = true;
                 }
                 _ if arg.starts_with('-') => {
                     return Err(format!("unknown option: {arg}\n\n{}", usage()).into());
@@ -88,6 +95,8 @@ impl Config {
             port,
             open_browser,
             mode,
+            host_set,
+            port_set,
         })
     }
 }
@@ -101,16 +110,33 @@ fn main() {
 
 fn run() -> Result<()> {
     let args: Vec<String> = env::args().collect();
-    if args
+    let flags: Vec<&String> = args.iter().skip(1).collect();
+
+    if flags
         .iter()
-        .skip(1)
         .any(|arg| matches!(arg.as_str(), "-h" | "--help"))
     {
         println!("{}", usage());
         return Ok(());
     }
+    if flags
+        .iter()
+        .any(|arg| matches!(arg.as_str(), "-V" | "--version"))
+    {
+        println!("md-reader {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
 
     let config = Config::parse(args)?;
+    if config.mode == Mode::Preview {
+        if config.host_set {
+            eprintln!("warning: --host is only used in --serve mode; ignoring it");
+        }
+        if config.port_set {
+            eprintln!("warning: --port is only used in --serve mode; ignoring it");
+        }
+    }
+
     let file = fs::canonicalize(&config.file)?;
 
     if !file.is_file() {
@@ -131,7 +157,7 @@ fn preview_file(file: &Path, open_browser: bool) -> Result<()> {
     println!("Preview {}", preview_file.display());
 
     if open_browser {
-        open_in_browser(&preview_file)?;
+        open_in_browser(&preview_file.to_string_lossy())?;
     }
 
     Ok(())
@@ -148,15 +174,19 @@ fn serve_file(file: &Path, config: &Config) -> Result<()> {
     println!("Press Ctrl-C to stop.");
 
     if config.open_browser {
-        open_url(&url)?;
+        open_in_browser(&url)?;
     }
 
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
-                if let Err(err) = handle_connection(stream, file, &base_dir) {
-                    eprintln!("request failed: {err}");
-                }
+                let file = file.to_path_buf();
+                let base_dir = base_dir.clone();
+                std::thread::spawn(move || {
+                    if let Err(err) = handle_connection(stream, &file, &base_dir) {
+                        eprintln!("request failed: {err}");
+                    }
+                });
             }
             Err(err) => eprintln!("connection failed: {err}"),
         }
@@ -358,10 +388,10 @@ fn hex_value(byte: u8) -> Option<u8> {
     }
 }
 
-fn respond(stream: &mut TcpStream, response: &Response) -> Result<()> {
+fn respond<W: Write>(stream: &mut W, response: &Response) -> Result<()> {
     write!(
         stream,
-        "HTTP/1.1 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
         response.status, response.content_type, response.body.len()
     )?;
     stream.write_all(&response.body)?;
@@ -370,7 +400,8 @@ fn respond(stream: &mut TcpStream, response: &Response) -> Result<()> {
 }
 
 fn render_document(file: &Path, serve: bool) -> Result<String> {
-    let markdown = fs::read_to_string(file)?;
+    let bytes = fs::read(file)?;
+    let markdown = String::from_utf8_lossy(&bytes);
     let title = file
         .file_name()
         .and_then(OsStr::to_str)
@@ -395,6 +426,7 @@ fn render_document(file: &Path, serve: bool) -> Result<String> {
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{title}</title>
   <base href="{base_href}">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%232563eb'/><text x='16' y='21' font-family='monospace' font-size='15' font-weight='700' fill='white' text-anchor='middle'>md</text></svg>">
   <style>{css}</style>
 </head>
 <body>
@@ -619,40 +651,21 @@ fn find_latex_delimiter(input: &str, mut position: usize, closing: &str) -> Opti
     None
 }
 
-fn open_in_browser(path: &Path) -> Result<()> {
-    let target = path.to_string_lossy();
+fn open_in_browser(target: &str) -> Result<()> {
     let status = if cfg!(target_os = "macos") {
-        Command::new("open").arg(path).status()?
+        Command::new("open").arg(target).status()?
     } else if cfg!(target_os = "windows") {
         Command::new("cmd")
-            .args(["/C", "start", "", target.as_ref()])
+            .args(["/C", "start", "", target])
             .status()?
     } else {
-        Command::new("xdg-open").arg(path).status()?
+        Command::new("xdg-open").arg(target).status()?
     };
 
     if status.success() {
         Ok(())
     } else {
-        Err(format!("failed to open browser for {}", path.display()).into())
-    }
-}
-
-fn open_url(url: &str) -> Result<()> {
-    let status = if cfg!(target_os = "macos") {
-        Command::new("open").arg(url).status()?
-    } else if cfg!(target_os = "windows") {
-        Command::new("cmd")
-            .args(["/C", "start", "", url])
-            .status()?
-    } else {
-        Command::new("xdg-open").arg(url).status()?
-    };
-
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!("failed to open browser for {url}").into())
+        Err(format!("failed to open browser for {target}").into())
     }
 }
 
@@ -724,7 +737,7 @@ fn escape_html(input: &str) -> String {
 }
 
 fn usage() -> String {
-    "Usage: md-reader [OPTIONS] <file.md>\n\nOptions:\n  --serve          Serve the file over local HTTP instead of writing a temp HTML preview\n  --host <host>    Host to bind in --serve mode (default: 127.0.0.1)\n  --port <port>    Port to bind in --serve mode (default: random available port)\n  --no-open        Render or serve without opening a browser\n  -h, --help       Show this help".to_string()
+    "Usage: md-reader [OPTIONS] <file.md>\n\nOptions:\n  --serve          Serve the file over local HTTP instead of writing a temp HTML preview\n  --host <host>    Host to bind in --serve mode (default: 127.0.0.1)\n  --port <port>    Port to bind in --serve mode (default: random available port)\n  --no-open        Render or serve without opening a browser\n  -h, --help       Show this help\n  -V, --version    Show version".to_string()
 }
 
 const KATEX_CSS: &str = include_str!("../assets/katex/katex.min.css");
@@ -1212,6 +1225,16 @@ hr {
   min-width: 0;
 }
 
+.katex-error {
+  background: var(--accent-subtle);
+  border: 1px dashed var(--accent);
+  border-radius: 5px;
+  color: var(--accent);
+  display: inline-block;
+  font-size: 0.85em;
+  padding: 0.1em 0.45em;
+}
+
 @media (prefers-color-scheme: dark) {
   body {
     background: radial-gradient(64rem 36rem at 50% -10rem, rgb(37 57 92 / 0.38), transparent 72%), var(--canvas);
@@ -1358,6 +1381,8 @@ mod tests {
         assert_eq!(config.port, 0);
         assert!(config.open_browser);
         assert_eq!(config.mode, Mode::Preview);
+        assert!(!config.host_set);
+        assert!(!config.port_set);
     }
 
     #[test]
@@ -1377,6 +1402,8 @@ mod tests {
         assert_eq!(config.port, 4000);
         assert!(!config.open_browser);
         assert_eq!(config.mode, Mode::Serve);
+        assert!(config.host_set);
+        assert!(config.port_set);
     }
 
     #[test]
@@ -1556,6 +1583,51 @@ And $x^2$ is inline.",
         let response = handle_request(&escaped, &file, &dir).unwrap();
 
         assert_eq!(response.status, "404 Not Found");
+    }
+
+    #[test]
+    fn responses_are_marked_no_store() {
+        let response = Response {
+            status: "200 OK",
+            content_type: "text/plain; charset=utf-8",
+            body: b"ok".to_vec(),
+        };
+        let mut buffer = Vec::new();
+
+        respond(&mut buffer, &response).unwrap();
+
+        let head = String::from_utf8(buffer).unwrap();
+        assert!(head.starts_with("HTTP/1.1 200 OK\r\n"));
+        assert!(head.contains("Cache-Control: no-store\r\n"));
+        assert!(head.ends_with("\r\n\r\nok"));
+    }
+
+    #[test]
+    fn html_includes_an_inline_favicon() {
+        let file = temp_markdown_file("hello");
+        let html = render_document(&file, false).unwrap();
+
+        assert!(html.contains("rel=\"icon\""));
+        assert!(html.contains("data:image/svg+xml"));
+    }
+
+    #[test]
+    fn reader_css_styles_katex_errors() {
+        assert!(reader_css().contains(".katex-error"));
+    }
+
+    #[test]
+    fn renders_files_with_invalid_utf8_lossily() {
+        let n = PREVIEW_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "md-reader-binary-{}-{n}.md",
+            std::process::id()
+        ));
+        fs::write(&path, b"plain \xff\xfe bytes").unwrap();
+
+        let html = render_document(&path, false).unwrap();
+
+        assert!(html.contains('\u{FFFD}'));
     }
 
     #[test]
