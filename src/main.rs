@@ -141,7 +141,7 @@ fn serve_file(file: &Path, config: &Config) -> Result<()> {
     let base_dir = file.parent().unwrap_or(Path::new("/")).to_path_buf();
     let listener = TcpListener::bind((config.host.as_str(), config.port))?;
     let addr = listener.local_addr()?;
-    let url = format!("http://{}:{}/", config.host, addr.port());
+    let url = format!("http://{}:{}/", display_host(&config.host), addr.port());
 
     println!("Reading {}", file.display());
     println!("Serving {url}");
@@ -186,6 +186,16 @@ fn write_preview_file(source_file: &Path, html: &str) -> Result<PathBuf> {
 
     fs::write(&output, html)?;
     Ok(output)
+}
+
+/// Wildcard binds listen on every interface but are not usable as a browser
+/// address, so print the loopback address instead.
+fn display_host(host: &str) -> String {
+    if host == "0.0.0.0" || host == "::" {
+        "127.0.0.1".to_string()
+    } else {
+        host.to_string()
+    }
 }
 
 /// Removes preview files in `preview_dir` that are older than `max_age`, so
@@ -1546,6 +1556,14 @@ And $x^2$ is inline.",
         let response = handle_request(&escaped, &file, &dir).unwrap();
 
         assert_eq!(response.status, "404 Not Found");
+    }
+
+    #[test]
+    fn display_host_maps_wildcard_binds_to_loopback() {
+        assert_eq!(display_host("0.0.0.0"), "127.0.0.1");
+        assert_eq!(display_host("::"), "127.0.0.1");
+        assert_eq!(display_host("localhost"), "localhost");
+        assert_eq!(display_host("192.168.1.5"), "192.168.1.5");
     }
 
     #[test]
