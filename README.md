@@ -13,7 +13,7 @@ temporary HTML file, opens it in your browser, and exits.
 - Offline LaTeX math rendering with KaTeX (`$...$`, `$$...$$`, `\(...\)`, and `\[...\]`)
 - Relative images and links resolved from the Markdown file's directory
 - One-shot preview mode for quick reading
-- Optional local server mode for editing and browser refresh workflows
+- Optional local server mode with automatic refresh for editing workflows
 - Single native binary for Linux, Windows, and macOS
 
 ## Install
@@ -52,7 +52,7 @@ Serve the file over local HTTP:
 md-reader --serve README.md
 ```
 
-In `--serve` mode, refresh the browser to read the latest file contents.
+In `--serve` mode, the page reloads automatically whenever the file changes on disk.
 
 ## Options
 

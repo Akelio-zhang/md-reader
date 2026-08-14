@@ -123,7 +123,7 @@ fn run() -> Result<()> {
 }
 
 fn preview_file(file: &Path, open_browser: bool) -> Result<()> {
-    let html = render_document(file)?;
+    let html = render_document(file, false)?;
     let preview_file = write_preview_file(file, &html)?;
 
     println!("Rendered {}", file.display());
@@ -181,6 +181,12 @@ fn write_preview_file(source_file: &Path, html: &str) -> Result<PathBuf> {
     Ok(output)
 }
 
+struct Response {
+    status: &'static str,
+    content_type: &'static str,
+    body: Vec<u8>,
+}
+
 fn handle_connection(mut stream: TcpStream, file: &Path) -> Result<()> {
     let mut buffer = [0; 2048];
     let bytes_read = stream.read(&mut buffer)?;
@@ -194,43 +200,57 @@ fn handle_connection(mut stream: TcpStream, file: &Path) -> Result<()> {
         .next()
         .unwrap_or("/");
 
-    match path {
-        "/" | "/index.html" => respond(
-            &mut stream,
-            "200 OK",
-            "text/html; charset=utf-8",
-            render_document(file)?.as_bytes(),
-        )?,
-        "/health" => respond(&mut stream, "200 OK", "text/plain; charset=utf-8", b"ok")?,
-        _ => respond(
-            &mut stream,
-            "404 Not Found",
-            "text/plain; charset=utf-8",
-            b"not found",
-        )?,
-    }
-
-    Ok(())
+    respond(&mut stream, &handle_request(path, file)?)
 }
 
-fn respond(stream: &mut TcpStream, status: &str, content_type: &str, body: &[u8]) -> Result<()> {
+fn handle_request(path: &str, file: &Path) -> Result<Response> {
+    match path {
+        "/" | "/index.html" => Ok(Response {
+            status: "200 OK",
+            content_type: "text/html; charset=utf-8",
+            body: render_document(file, true)?.into_bytes(),
+        }),
+        "/refresh" => Ok(Response {
+            status: "200 OK",
+            content_type: "text/plain; charset=utf-8",
+            body: file_mtime_millis(file)?.to_string().into_bytes(),
+        }),
+        "/health" => Ok(Response {
+            status: "200 OK",
+            content_type: "text/plain; charset=utf-8",
+            body: b"ok".to_vec(),
+        }),
+        _ => Ok(Response {
+            status: "404 Not Found",
+            content_type: "text/plain; charset=utf-8",
+            body: b"not found".to_vec(),
+        }),
+    }
+}
+
+fn respond(stream: &mut TcpStream, response: &Response) -> Result<()> {
     write!(
         stream,
-        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-        body.len()
+        "HTTP/1.1 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        response.status, response.content_type, response.body.len()
     )?;
-    stream.write_all(body)?;
+    stream.write_all(&response.body)?;
     stream.flush()?;
     Ok(())
 }
 
-fn render_document(file: &Path) -> Result<String> {
+fn render_document(file: &Path, serve: bool) -> Result<String> {
     let markdown = fs::read_to_string(file)?;
     let title = file
         .file_name()
         .and_then(OsStr::to_str)
         .unwrap_or("Markdown Reader");
     let body = render_markdown(&markdown);
+    let script = if serve {
+        live_reload_script(file)?
+    } else {
+        String::new()
+    };
 
     Ok(format!(
         r#"<!doctype html>
@@ -255,13 +275,45 @@ fn render_document(file: &Path) -> Result<String> {
       {body}
     </article>
   </main>
+  {script}
 </body>
 </html>"#,
         title = escape_html(title),
         base_href = escape_html(&base_href_for(file)?),
         css = reader_css(),
-        body = body
+        body = body,
+        script = script
     ))
+}
+
+/// Polls the serve-mode `/refresh` endpoint and reloads the page when the
+/// source file's modification time changes.
+fn live_reload_script(file: &Path) -> Result<String> {
+    let mtime = file_mtime_millis(file)?;
+    Ok(format!(
+        r#"<script>
+(function () {{
+  var current = "{mtime}";
+  function poll() {{
+    fetch("/refresh", {{ cache: "no-store" }})
+      .then(function (response) {{ return response.ok ? response.text() : null; }})
+      .then(function (text) {{
+        if (text && text !== current) {{ location.reload(); }}
+      }})
+      .catch(function () {{}});
+  }}
+  setInterval(poll, 750);
+}})();
+</script>"#,
+    ))
+}
+
+fn file_mtime_millis(file: &Path) -> Result<u128> {
+    let modified = fs::metadata(file)?.modified()?;
+    Ok(modified
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0))
 }
 
 fn render_markdown(markdown: &str) -> String {
@@ -1125,6 +1177,18 @@ hr {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static PREVIEW_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    fn temp_markdown_file(contents: &str) -> PathBuf {
+        let n = PREVIEW_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join("md-reader-tests");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("notes-{}-{n}.md", std::process::id()));
+        fs::write(&path, contents).unwrap();
+        path
+    }
 
     #[test]
     fn parses_required_file_and_defaults() {
@@ -1223,5 +1287,48 @@ And $x^2$ is inline.",
             percent_encode_url_path("file:///tmp/my notes/"),
             "file:///tmp/my%20notes/"
         );
+    }
+
+    #[test]
+    fn serve_html_embeds_live_reload_script() {
+        let file = temp_markdown_file("hello");
+        let mtime = file_mtime_millis(&file).unwrap();
+        let html = render_document(&file, true).unwrap();
+
+        assert!(html.contains("setInterval"));
+        assert!(html.contains("/refresh"));
+        assert!(html.contains(&format!("var current = \"{mtime}\"")));
+    }
+
+    #[test]
+    fn preview_html_does_not_embed_live_reload_script() {
+        let file = temp_markdown_file("hello");
+        let html = render_document(&file, false).unwrap();
+
+        assert!(!html.contains("setInterval"));
+        assert!(!html.contains("/refresh"));
+    }
+
+    #[test]
+    fn refresh_route_reports_file_mtime_in_milliseconds() {
+        let file = temp_markdown_file("hello");
+        let response = handle_request("/refresh", &file).unwrap();
+
+        assert_eq!(response.status, "200 OK");
+        assert_eq!(response.content_type, "text/plain; charset=utf-8");
+        assert_eq!(
+            String::from_utf8(response.body).unwrap(),
+            file_mtime_millis(&file).unwrap().to_string()
+        );
+    }
+
+    #[test]
+    fn serve_root_route_returns_rendered_document() {
+        let file = temp_markdown_file("# Hello");
+        let response = handle_request("/", &file).unwrap();
+
+        assert_eq!(response.status, "200 OK");
+        assert_eq!(response.content_type, "text/html; charset=utf-8");
+        assert!(String::from_utf8(response.body).unwrap().contains("<h1>Hello</h1>"));
     }
 }
