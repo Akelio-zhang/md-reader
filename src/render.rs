@@ -123,6 +123,8 @@ const COPY_SCRIPT: &str = r#"<script>
   document.addEventListener("pointerover", function (event) {
     var pre = event.target.closest("pre");
     if (!pre || pre.dataset.mdCopy) return;
+    var code = pre.querySelector("code");
+    if (!code) return;
     pre.dataset.mdCopy = "1";
 
     var button = document.createElement("button");
@@ -131,7 +133,7 @@ const COPY_SCRIPT: &str = r#"<script>
     button.textContent = "Copy";
     button.setAttribute("aria-label", "Copy code to clipboard");
     button.addEventListener("click", function () {
-      var text = pre.innerText;
+      var text = code.innerText;
       function copied() {
         button.textContent = "Copied ✓";
         setTimeout(function () { button.textContent = "Copy"; }, 1500);
@@ -798,6 +800,12 @@ And $x^2$ is inline.",
 
         assert_eq!(preview.matches("Copied ✓").count(), 1);
         assert_eq!(served.matches("Copied ✓").count(), 1);
+    }
+
+    #[test]
+    fn copy_script_excludes_the_copy_button_text() {
+        assert!(COPY_SCRIPT.contains(r#"var text = code.innerText;"#));
+        assert!(!COPY_SCRIPT.contains(r#"var text = pre.innerText;"#));
     }
 
     #[test]
