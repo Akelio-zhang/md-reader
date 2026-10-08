@@ -322,10 +322,66 @@ img {
   max-width: 100%;
 }
 
-input[type="checkbox"] {
-  accent-color: var(--accent);
-  margin: 0 0.2em 0.25em -1.4em;
-  vertical-align: middle;
+/* Target only each item's own marker so nested tasks don't hide parent bullets. */
+.markdown-body li:has(> input[type="checkbox"], > p:first-child > input[type="checkbox"]) {
+  list-style: none;
+  position: relative;
+}
+
+.markdown-body li + li:has(> input[type="checkbox"], > p:first-child > input[type="checkbox"]) {
+  margin-top: 0.7em;
+}
+
+.markdown-body li:has(> p:first-child > input[type="checkbox"]) > p:first-child {
+  margin-top: 0;
+}
+
+.markdown-body li:has(> input[type="checkbox"], > p:first-child > input[type="checkbox"]) > :is(ul, ol) {
+  margin-top: 0.7em;
+  margin-bottom: 0;
+}
+
+.markdown-body :where(li > input, li > p:first-child > input)[type="checkbox"] {
+  appearance: none;
+  background: var(--surface);
+  border: 1.5px solid var(--muted);
+  border-radius: 4px;
+  color: var(--surface);
+  font: inherit;
+  height: 1.05em;
+  width: 1.05em;
+  margin: 0;
+  opacity: 1;
+  position: absolute;
+  left: -1.55em;
+  top: calc((1lh - 1.05em) / 2);
+}
+
+.markdown-body input[type="checkbox"]:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.markdown-body input[type="checkbox"]:checked::after {
+  content: "";
+  position: absolute;
+  left: 0.29em;
+  top: 0.1em;
+  width: 0.25em;
+  height: 0.5em;
+  border: solid currentColor;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+@media (forced-colors: active) {
+  .markdown-body input[type="checkbox"] {
+    appearance: auto;
+  }
+
+  .markdown-body input[type="checkbox"]:checked::after {
+    content: none;
+  }
 }
 
 hr {
