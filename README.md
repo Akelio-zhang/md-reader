@@ -8,10 +8,11 @@ temporary HTML file, opens it in your browser, and exits.
 
 ## Features
 
-- GitHub-like Markdown preview style with light and dark color schemes
-- Tables, task lists, footnotes, strikethrough, and heading attributes
+- Editorial Markdown preview style with Auto, Light, Sepia (warm paper), and Dark theme switching
+- Tables, task lists, footnotes, strikethrough, GFM alerts (`[!NOTE]`, `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]`, `[!CAUTION]`), and heading attributes
+- Automatic heading anchors, floating table of contents with scroll spy, reading stats, progress bar, and image lightbox preview
 - Offline LaTeX math rendering with KaTeX (`$...$`, `$$...$$`, `\(...\)`, and `\[...\]`)
-- Syntax-highlighted fenced code blocks (15 common languages) with light and dark themes, and one-click code copy
+- Syntax-highlighted fenced code blocks (15 common languages) synced with light and dark themes, with hover-revealed one-click copy
 - Relative images and links resolved from the Markdown file's directory
 - One-shot preview mode for quick reading
 - Optional local server mode with automatic refresh for editing workflows
@@ -84,11 +85,11 @@ This repository includes a GitHub Actions workflow that:
 - builds release artifacts for Linux, Windows, and macOS
 - uploads compiled binaries when a version tag is pushed
 
-To publish version `0.1.2`:
+To publish version `0.2.0`:
 
 ```sh
-git tag v0.1.2
-git push origin v0.1.2
+git tag v0.2.0
+git push origin v0.2.0
 ```
 
 ## License
